@@ -5,6 +5,11 @@
 
 %%
 
+/* Espacios en blanco */
+\s+											// se ignoran espacios en blanco
+"//".*										// comentario simple línea
+[/][*][^*]*[*]+([^/*][^*]*[*]+)*[/]			// comentario multiple líneas
+
 ";"                 return 'SEMICOLON';
 ","                 return 'COMMA';
 ":"                 return 'COLON';
@@ -19,6 +24,8 @@
 
 "++"                return 'INCREMENT';
 "--"                return 'DECREMENT';
+
+"**"				return 'POWER';
 
 "+"                 return 'PLUS';
 "-"                 return 'MINUS';
@@ -81,9 +88,7 @@
 
 
 
-/* Espacios en blanco */
-[ \r\t]+            {}
-\n                  {}
+
 
 [0-9]+("."[0-9]+)?\b    				return 'DECIMAL';
 [0-9]+\b                				return 'INTEGER';
@@ -92,7 +97,10 @@
 
 
 <<EOF>>                 return 'EOF';
-.                       { console.error('Este es un error léxico: ' + yytext + ', en la linea: ' + yylloc.first_line + ', en la columna: ' + yylloc.first_column); }
+.                       {
+							lexicalErrors.push(new Error('Error léxico en el token '+ yytext+'.', yylloc.first_line, yylloc.first_column));
+							console.error('Error léxico: ' + yytext + ', en la linea: ' + yylloc.first_line + ', en la columna: ' + yylloc.first_column);
+						}
 /lex
 
 /* Asociación de operadores y precedencia */
@@ -222,6 +230,13 @@
 		this.value = value;
 	};
 
+	var Power = function(value1, value2)
+	{
+		this.model = "Power";
+		this.value1 = value1;
+		this.value2 = value2;
+	};
+
 	var  UnaryOperation = function(value, operator)
 	{
 		this.model = "UnaryOperation";
@@ -319,7 +334,32 @@
 	{
 		this.model = 'Call';
 		this.id = id;
-		this.parameters;
+		this.parameters = parameters;
+	};
+
+	var Push = function(arr, expression)
+	{
+		this.model = 'Push';
+		this.value1 = arr;
+		this.value2 = expression;
+	};
+
+	var Pop = function(value)
+	{
+		this.model = 'Pop';
+		this.value = value;
+	};
+
+	var Length = function(value)
+	{
+		this.model = 'Length';
+		this.value = value;
+	};
+
+	var ArrayAssignment = function(expr)
+	{
+		this.model = 'ArrayAssignment';
+		this.value = expr;
 	};
 
 	// FUNCTIONS
@@ -420,10 +460,39 @@
 		return c;
 	}
 
+	function create_push(arr, exp)
+	{
+		let p = new Push(arr, exp);
+		return p;
+	}
+
+	function create_pop(arr)
+	{
+		let p = new Pop(arr);
+		return p;
+	}
+	
+	function create_length(arr)
+	{
+		let l = new Length(arr);
+		return l;
+	}
+
+	function create_arrayassignment(arr)
+	{
+		let a = new ArrayAssignment(arr);
+		return a;
+	}
+
 	function create_preoperation(val, op)
 	{
 		let a = new PreOperation(val, op);
 		return a;
+	}
+	function create_power(val1, val2)
+	{
+		let p = new Power(val1, val2);
+		return p;
 	}
 	function create_unaryoperation(val, op)
 	{
@@ -518,21 +587,41 @@ S
 decls
 	: decl decls
 	{
-		let decls = [$1];
+		let decls1 = [$1];
 		if($2 != null)
 		{
-			$2.forEach(element => decls.push(element));
+			if(Array.isArray($2))
+			{
+				$2.forEach(element => decls1.push(element));
+			}
+			else
+			{
+				decls1.push($2);
+			}
+			
 		}
-		$$ = decls;
+		$$ = decls1;
 	}
 	|
 	{
 		$$ = null;
 	}
+	| error SEMICOLON
+	{
+		syntaxErrors.push(new Error('Token no esperado: ' + yytext + '.', this._$.first_line, this._$.first_column));
+	}
+	| error L_CURLY
+	{
+		syntaxErrors.push(new Error('Token no esperado: ' + yytext + '.', this._$.first_line, this._$.first_column));
+	}
+	| error
+	{
+		syntaxErrors.push(new Error('Token no esperado: ' + yytext + '.', this._$.first_line, this._$.first_column));
+	}
 ;
 
 decl
-	: func_decl
+	: func_decl DOT DOT DOT
 	{
 		$$ = $1;
 	}
@@ -564,16 +653,37 @@ func_decl
 params
 	: param COMMA params
 	{
-		let params = [$1];
+		let paramsList = [$1];
 		if($3 != null)
 		{
-			$3.forEach(element => params.push(element));
+			$3.forEach(element => paramsList.push(element));
 		}
-		$$ = params;
+		$$ = paramsList;
 	}
 	| param
 	{
-		$$ = $1;
+		$$ = [$1];
+	}	
+;
+
+param
+	: NAME return_type
+	{
+		let param1 = {
+			model: 'Parameter',
+			id: $1,
+			type: $2
+		};
+		$$ = param1;
+	}
+	| NAME
+	{
+		let param2 = {
+			model: 'Parameter',
+			id: $1,
+			type: null
+		}; 
+		$$ = param2;
 	}
 ;
 
@@ -601,7 +711,7 @@ type
 	{
 		$$ = $1;
 	}
-;
+	;
 
 block_decl
 	: L_CURLY stm_list R_CURLY
@@ -627,17 +737,21 @@ stm_list
 ;
 
 stm
-	: var_decl SEMICOLON
+	: func_decl
 	{
 		$$ = $1;
+	}
+	| var_decl SEMICOLON
+	{
+		$$ = $1;
+	}
+	| IF L_PAR expr	R_PAR stm ELSE stm
+	{
+		$$ = create_ifelse($3, $5, $7);
 	}
 	| IF L_PAR expr R_PAR stm
 	{
 		$$ =  create_if($3, $5);
-	}
-	| IF L_PAR expr	R_PAR then_stm ELSE stm
-	{
-		$$ = create_ifelse($3, $5, $7);
 	}
 	| WHILE L_PAR expr R_PAR stm
 	{
@@ -647,11 +761,11 @@ stm
 	{
 		$$ = create_for($3, $5, $7, $9);
 	}
-	| FOR L_PAR VAR NAME OF NAME R_PAR stm
+	| FOR L_PAR LET NAME OF NAME R_PAR stm
 	{
 		$$ =  create_forof($4, $6, $8);
 	}
-	| FOR L_PAR VAR NAME IN NAME R_PAR stm
+	| FOR L_PAR LET NAME IN NAME R_PAR stm
 	{
 		$$ =  create_forin($4, $6, $8);
 	}
@@ -666,6 +780,10 @@ then_stm
 	{
 		$$ = create_ifelse($3, $5, $7);
 	}
+	| IF L_PAR expr	R_PAR then_stm
+	{
+		$$ = create_if($3, $5);
+	}
 	| WHILE L_PAR expr R_PAR then_stm
 	{
 		$$ = create_while($3, $5);
@@ -674,11 +792,12 @@ then_stm
 	{
 		$$ = create_for($3, $5, $7, $9);
 	}
-	| FOR L_PAR VAR NAME OF NAME R_PAR then_stm
+	| FOR L_PAR LET NAME OF NAME R_PAR then_stm
 	{
+		//test comment
 		$$ =  create_forof($4, $6, $8);
 	}
-	| FOR L_PAR VAR NAME IN NAME R_PAR then_stm
+	| FOR L_PAR LET NAME IN NAME R_PAR then_stm
 	{
 		$$ =  create_forin($4, $6, $8);
 	}
@@ -704,6 +823,7 @@ normal_stm
 	| expr SEMICOLON
 	{
 		// does nothing
+		$$ = $1;
 	}
 	| BREAK SEMICOLON
 	{
@@ -713,9 +833,14 @@ normal_stm
 	{
 		$$ =  create_continue();
 	}
-	| return expr SEMICOLON
+	| RETURN expr SEMICOLON
 	{
 		$$ = create_return($2);
+	}
+	| RETURN SEMICOLON
+	{
+		// return with no expression(2)
+		$$ = create_return('null');
 	}
 	| SEMICOLON
 	{
@@ -876,11 +1001,13 @@ case_stm
 	}
 	| DEFAULT COLON L_CURLY stm_list R_CURLY
 	{
-		$$ = [create_case('default', $4)];
+		let defString1 = create_string('default');
+		$$ = [create_case(defString1, $4)];
 	}
 	| DEFAULT COLON stm_list
 	{
-		$$ = [create_case('default', $3)];
+		let defString2 = create_string('default');
+		$$ = [create_case(defString2, $3)];
 	}
 	|
 	{
@@ -1062,7 +1189,7 @@ op_mult
 	}
 	| op_mult DIVIDE op_unary
 	{
-		$ = create_arithmeticoperation($1, $3, $2);
+		$$ = create_arithmeticoperation($1, $3, $2);
 	}
 	| op_mult REMAINDER op_unary
 	{
@@ -1096,6 +1223,10 @@ op_unary
 	{
 		$$ = create_unaryoperation($2, $1);
 	}
+	| op_unary POWER op_pointer
+	{
+		$$ = create_unaryoperation(create_power($1,$3), $2);
+	}
 	| op_pointer
 	{
 		$$ = $1;
@@ -1105,11 +1236,22 @@ op_unary
 op_pointer
 	: op_pointer DOT value
 	{
-		//attribute access
+		// array . push ( op_pointer ) ;
+		// array . pop ( ) ;
+		// array . length ;
+		$$ = null;
 	}
 	| op_pointer L_SQUARE expr R_SQUARE
 	{
 		//array access
+		let arrayList = [];
+		let ArrayAccess = 
+		{
+			model: 'ArrayAccess',
+			id: $1,
+			index: $3,
+		};
+		$$ = ArrayAccess;
 	}
 	| value
 	{
@@ -1146,6 +1288,7 @@ value
 	| NAME L_PAR expr R_PAR
 	{
 		//function call
+		
 		$$ = create_call($1, $3);
 	}
 	| NAME L_PAR      R_PAR	
@@ -1156,13 +1299,27 @@ value
 	| L_SQUARE expr R_SQUARE
 	{
 		//array assignment [elements]
+		$$ = create_arrayassignment($2);
 	}
 	| L_SQUARE		R_SQUARE
 	{
 		//array assignment []
+		$$ = create_arrayassignment(null);
 	}
 	| L_PAR expr R_PAR
 	{
 		$$ = $2;
+	}
+	| NAME DOT PUSH L_PAR expr R_PAR
+	{
+		$$ = create_push($1, $5);
+	}
+	| NAME DOT POP L_PAR	   R_PAR
+	{
+		$$ = create_pop($1);
+	}
+	| NAME DOT LENGTH
+	{
+		$$ = create_length($1);
 	}
 ;
